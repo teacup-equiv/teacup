@@ -2,3 +2,5 @@ streamlit
 numpy
 pandas
 scipy
+openpyxl>=3.1
+xlrd>=2.0.1

@@ -3,48 +3,99 @@ import pandas as pd
 import io
 
 
-def read_table_from_bytes(content: bytes, filename: str = "uploaded_file", header_override: str = "Auto-detect") -> Tuple[pd.DataFrame, bool]:
+from typing import Tuple
+import pandas as pd
+import io
+
+def read_table_from_bytes(
+    content: bytes,
+    filename: str = "uploaded_file",
+    header_override: str = "Auto-detect"
+) -> Tuple[pd.DataFrame, bool]:
     """
     Read a bytes payload (uploaded file) into a pandas DataFrame.
-    Tries excel, then CSV with sep sniffing, then fallback parsing.
+    - Excel: reads via pandas.read_excel with explicit engines
+    - CSV/other: reads via pandas.read_csv with sep sniffing
+    - Fallback: parse as text via parse_table_from_text
     Returns (df, header_used_bool).
     """
     fname = (filename or "").lower()
-    ext = ""
-    if "." in fname:
-        ext = fname.split(".")[-1]
+    ext = fname.split(".")[-1] if "." in fname else ""
 
-    # try reading with pandas robustly
+    def _finalize_with_header_detection(raw: pd.DataFrame) -> Tuple[pd.DataFrame, bool]:
+        raw = raw.replace({"": pd.NA, " ": pd.NA})
+
+        # If user forces header behavior, reuse parse_table_from_text logic.
+        if header_override in ("Force header", "Force no header"):
+            text = "\n".join(
+                raw.astype(str)
+                   .fillna("")
+                   .apply(lambda row: ",".join(row.values), axis=1)
+                   .tolist()
+            )
+            df, header_used = parse_table_from_text(text, header_override=header_override)
+            return df, header_used
+
+        # Auto-detect header using parse_table_from_text on a tab-delimited representation.
+        text = "\n".join(
+            raw.astype(str)
+               .fillna("")
+               .apply(lambda row: "\t".join(row.values), axis=1)
+               .tolist()
+        )
+        df, header_used = parse_table_from_text(text, header_override="Auto-detect")
+        return df, header_used
+
+    # --- Excel path ---
+    if ext in ("xls", "xlsx"):
+        bio = io.BytesIO(content)
+
+        if ext == "xls":
+            # .xls requires xlrd (optional dependency)
+            try:
+                import xlrd  # noqa: F401
+            except Exception as e:
+                raise ValueError(
+                    "Unable to read .xls files because the optional dependency 'xlrd' is not installed. "
+                    "Install it (pip install xlrd) or save the file as .xlsx or .csv."
+                ) from e
+            try:
+                raw = pd.read_excel(bio, header=None, dtype=object, engine="xlrd")
+                return _finalize_with_header_detection(raw)
+            except Exception as e:
+                # If the file is mislabeled (actually CSV), fall back to text parsing.
+                # But avoid silently continuing with confusing behavior.
+                raise ValueError(f"Failed to read .xls file '{filename}': {e}") from e
+
+        else:  # xlsx
+            # .xlsx typically uses openpyxl (optional dependency)
+            try:
+                import openpyxl  # noqa: F401
+            except Exception as e:
+                raise ValueError(
+                    "Unable to read .xlsx files because the optional dependency 'openpyxl' is not installed. "
+                    "Install it (pip install openpyxl) or save the file as .csv."
+                ) from e
+            try:
+                raw = pd.read_excel(bio, header=None, dtype=object, engine="openpyxl")
+                return _finalize_with_header_detection(raw)
+            except Exception as e:
+                raise ValueError(f"Failed to read .xlsx file '{filename}': {e}") from e
+
+    # --- CSV / text-ish path ---
     try:
-        if ext in ("xls", "xlsx"):
-            bio = io.BytesIO(content)
-            raw = pd.read_excel(bio, header=None, dtype=object)
-        else:
-            bio = io.BytesIO(content)
-            # try pandas csv sniffing with python engine sep=None
-            raw = pd.read_csv(bio, header=None, dtype=object, sep=None, engine="python")
+        bio = io.BytesIO(content)
+        raw = pd.read_csv(bio, header=None, dtype=object, sep=None, engine="python")
+        return _finalize_with_header_detection(raw)
     except Exception:
         try:
             bio = io.BytesIO(content)
             raw = pd.read_csv(bio, header=None, dtype=object)
+            return _finalize_with_header_detection(raw)
         except Exception:
             text = content.decode("utf-8", errors="replace")
-            raw, _ = parse_table_from_text(text, header_override=header_override)  # fallback uses same logic
-
-    raw = raw.replace({"": pd.NA, " ": pd.NA})
-
-    # detect header usage and finalize columns (reuse shared logic)
-    if header_override == "Force header" or header_override == "Force no header":
-        # keep as-is and apply header override by re-running parse_table_from_text on text
-        text = "\n".join(raw.astype(str).fillna("").apply(lambda row: ",".join(row.values), axis=1).tolist())
-        df, header_used = parse_table_from_text(text, header_override=header_override)
-        return df, header_used
-
-    # default behavior: try to infer header
-    # We already tried to read numeric types; call parse_table_from_text on textual representation
-    text = "\n".join(raw.astype(str).fillna("").apply(lambda row: "\t".join(row.values), axis=1).tolist())
-    df, header_used = parse_table_from_text(text, header_override="Auto-detect")
-    return df, header_used
+            df, header_used = parse_table_from_text(text, header_override=header_override)
+            return df, header_used
 
 
 # -------------------------
