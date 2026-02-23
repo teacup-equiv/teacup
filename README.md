@@ -62,6 +62,7 @@ Choose one effect-size parameterization:
 The app supports three input modes (depending on the selected test):
 
 1. **Upload file** (`.csv`, `.xls`, `.xlsx`)
+   (The folder 'sample files' has examples for one- and two-sample tests. They do not produce particularly interesting results, they just serve as an illustration of how the input format looks.)
 2. **Paste table** (comma- or tab-separated)
 3. **Summary statistics (manual)** *(t-tests only)*  
    - Two-sample: mean, SD, n for each group  
